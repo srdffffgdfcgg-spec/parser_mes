@@ -1,0 +1,168 @@
+import asyncio
+import csv
+import signal
+import sys
+import time
+from telethon import TelegramClient
+from telethon.errors import FloodWaitError
+
+# Ваші дані API
+api_id = 11111111
+api_hash = '000000000000000000000'
+
+# Список груп для парсингу
+group_links = [
+    'https://t.me/Nasva_Grupu',
+    # Додайте сюди інші посилання на групи
+]
+
+# Розширений список ключових слів для пошуку
+KEYWORDS = [
+    'ищу работу',
+    'ищу роботу',
+    'в пошуках роботи',
+    'в пошуках роботы',
+    'шукаю роботу',
+    'шукаю работу',
+    'шукаю роботы',
+    'ищу вакансию',
+    'шукаю вакансію',
+    'шукаю підробіток',
+    'ищу подработку',
+    'ищу трудоустройство',
+    'шукаю працевлаштування',
+    'нужна работа',
+    'потрібна робота',
+    'ищу заработок',
+    'шукаю заробіток',
+    'ищу работу в киеве',
+    'шукаю роботу в києві',
+    'ищу работу срочно',
+    'шукаю роботу терміново',
+    'готов работать',
+    'готовий працювати',
+    'ищу работу без опыта',
+    'шукаю роботу без досвіду',
+    'ищу работу на лето',
+    'шукаю роботу на літо',
+    'ищу работу на выходные',
+    'шукаю роботу на вихідні',
+    'ищу работу на неполный день',
+    'шукаю роботу на неповний день',
+    'ищу работу удаленно',
+    'шукаю роботу дистанційно',
+    'ищу работу онлайн',
+    'шукаю роботу онлайн',
+    'ищу работу студенту',
+    'шукаю роботу студенту',
+    'ищу работу после армии',
+    'шукаю роботу після армії',
+    'ищу работу без резюме',
+    'шукаю роботу без резюме',
+    'ищу работу без образования',
+    'шукаю роботу без освіти',
+]
+
+stop_flag = False
+
+def signal_handler(sig, frame):
+    global stop_flag
+    print('\nЗупинка... Зберігаю дані.')
+    stop_flag = True
+
+signal.signal(signal.SIGINT, signal_handler)
+
+async def send_note_safe(client, entity, text):
+    while True:
+        try:
+            await client.send_message(entity, text)
+            break
+        except FloodWaitError as e:
+            print(f'FloodWaitError: чекаю {e.seconds} секунд...')
+            time.sleep(e.seconds)
+
+async def main():
+    global stop_flag
+    client = TelegramClient('session', api_id, api_hash)
+    await client.start()
+    print('Підключено до Telegram!')
+
+    saved_messages = await client.get_input_entity('me')
+    all_contacts = []
+    summary_files = []
+
+    for group_link in group_links:
+        contacts = []
+        try:
+            entity = await client.get_entity(group_link)
+            print(f'Парсинг групи: {group_link}')
+        except Exception as e:
+            print(f'Не вдалося отримати групу {group_link}: {e}')
+            continue
+
+        async for message in client.iter_messages(entity, reverse=True):
+            if stop_flag:
+                break
+            if message.text:
+                text_lower = message.text.lower()
+                if any(keyword in text_lower for keyword in KEYWORDS):
+                    user = await message.get_sender()
+                    phone = getattr(user, 'phone', None)
+                    username = getattr(user, 'username', None)
+                    first_name = getattr(user, 'first_name', None)
+                    last_name = getattr(user, 'last_name', None)
+                    contact = {
+                        'message_id': message.id,
+                        'message': message.text,
+                        'username': username,
+                        'first_name': first_name,
+                        'last_name': last_name,
+                        'phone': phone,
+                        'group': group_link,
+                    }
+                    contacts.append(contact)
+                    all_contacts.append(contact)
+                    print(f"Збережено контакт #{len(contacts)}:")
+                    print(f"Текст: {message.text}")
+                    print(f"Дані: {contact}\n")
+
+                    # Формуємо текст для збереження у обране
+                    note_text = f"Контакт #{len(contacts)}\n"
+                    note_text += f"Група: {group_link}\n"
+                    note_text += f"Текст: {message.text}\n"
+                    note_text += f"Username: {username}\n"
+                    note_text += f"Ім'я: {first_name} {last_name}\n"
+                    note_text += f"Телефон: {phone}\n"
+                    await send_note_safe(client, saved_messages, note_text)
+
+        # Зберігаємо у файл для кожної групи
+        output_file = f"contacts_{group_link.split('/')[-1]}.csv"
+        summary_files.append(output_file)
+        with open(output_file, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=['message_id', 'message', 'username', 'first_name', 'last_name', 'phone', 'group'])
+            writer.writeheader()
+            writer.writerows(contacts)
+        print(f'Всього збережено контактів у {group_link}: {len(contacts)}')
+        print(f'Дані збережено у {output_file}')
+
+    # Зберігаємо всі контакти у загальний файл
+    all_file = 'contacts_all.csv'
+    with open(all_file, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=['message_id', 'message', 'username', 'first_name', 'last_name', 'phone', 'group'])
+        writer.writeheader()
+        writer.writerows(all_contacts)
+    print(f'Всього збережено контактів з усіх груп: {len(all_contacts)}')
+    print(f'Дані збережено у {all_file}')
+
+    # Надсилаємо підсумковий файл у обране
+    try:
+        with open(all_file, 'r', encoding='utf-8') as f:
+            file_content = f.read()
+        await send_note_safe(client, saved_messages, f'Файл зі всіма контактами:\n\n{file_content[:4000]}')
+        # Якщо файл великий, надсилаємо як документ
+        await client.send_file(saved_messages, all_file, caption='Всі контакти з усіх груп')
+    except Exception as e:
+        print(f'Не вдалося надіслати файл у обране: {e}')
+
+if __name__ == '__main__':
+    asyncio.run(main())
